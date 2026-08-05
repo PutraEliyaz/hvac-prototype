@@ -15,6 +15,7 @@ correlations are used anywhere in this file.
 import os
 import json
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import psychrolib as psy
 
@@ -305,9 +306,14 @@ def ahu_svg(sim):
 
     coil_color = "#e63946" if sim["bypass"] > 0.25 else "#4cc9f0"
 
-    return f'''
-    <div style="width:100%;overflow-x:auto;">
-    <svg viewBox="0 0 860 260" style="width:100%;min-width:700px;height:auto;">
+    return f'''<!DOCTYPE html><html><head><meta charset="utf-8">
+    <style>
+      html,body {{ margin:0; padding:0; background:transparent; overflow:hidden; }}
+      svg {{ display:block; width:100%; height:auto; }}
+      text {{ font-family: "Source Sans Pro", system-ui, sans-serif; }}
+    </style></head><body>
+    <svg viewBox="0 0 860 260" preserveAspectRatio="xMidYMid meet"
+         xmlns="http://www.w3.org/2000/svg">
       <defs>
         <marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="2.4"
                 orient="auto"><path d="M0,0 L0,4.8 L6,2.4 z" fill="#6ee7ff"/></marker>
@@ -374,7 +380,7 @@ def ahu_svg(sim):
       {badge(300, s2, "#4cc9f0")}
       {badge(482, s3, "#f77f00")}
       {badge(652, s4, "#06d6a0")}
-    </svg></div>'''
+    </svg></body></html>'''
 
 
 # ==========================================================================
@@ -396,7 +402,8 @@ BOUNDARY CONDITIONS - these are strict:
   Fundamentals formulations. Trust them over your own mental arithmetic.
 - Teach rather than just answer. Where useful, end with a short question that
   pushes the student to predict what happens next.
-- Keep replies under 150 words. Use plain text, no LaTeX.
+- Keep replies under 150 words. Answer directly and completely in one pass;
+  do not deliberate at length. Use plain text, no LaTeX.
 
 LIVE SYSTEM STATE (JSON):
 {context}
@@ -437,6 +444,25 @@ def get_api_key():
     except Exception:
         pass
     return os.environ.get("GEMINI_API_KEY", "")
+
+
+def extract_text(resp):
+    """Pull the visible answer out of a response. resp.text can be None when the
+    model spent its budget on thinking, so fall back to walking the parts."""
+    try:
+        if getattr(resp, "text", None):
+            return resp.text.strip()
+    except Exception:
+        pass
+    chunks = []
+    for cand in getattr(resp, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in (getattr(content, "parts", None) or []):
+            if getattr(part, "thought", False):
+                continue
+            if getattr(part, "text", None):
+                chunks.append(part.text)
+    return "\n".join(chunks).strip()
 
 
 def resolve_model():
@@ -507,15 +533,31 @@ def ask_llm(question, sim, controls, history):
                 parts=[types.Part(text=m["content"])]))
         contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
 
-        resp = client.models.generate_content(
-            model=model_id,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT.format(
-                    context=build_context(sim, controls)),
-                temperature=0.4, max_output_tokens=400),
-        )
-        return resp.text, "ok"
+        sys_prompt = SYSTEM_PROMPT.format(context=build_context(sim, controls))
+
+        def make_config(disable_thinking):
+            """Gemini 3.x models reason before answering and those thinking
+            tokens are charged against max_output_tokens. Left unchecked they
+            consume the whole budget and the visible answer is truncated
+            mid-sentence. We ask for minimal thinking and leave ample headroom."""
+            kw = dict(system_instruction=sys_prompt, temperature=0.4,
+                      max_output_tokens=2048)
+            if disable_thinking:
+                kw["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            return types.GenerateContentConfig(**kw)
+
+        try:
+            resp = client.models.generate_content(
+                model=model_id, contents=contents, config=make_config(True))
+        except Exception:
+            # some models require thinking and reject a zero budget
+            resp = client.models.generate_content(
+                model=model_id, contents=contents, config=make_config(False))
+
+        text = extract_text(resp)
+        if not text:
+            return None, "empty"
+        return text, "ok"
     except Exception as e:
         msg = str(e)
         # a retired or unavailable model returns 404 / "limit: 0" - try the next one
@@ -679,7 +721,9 @@ with tab3:
 with tab1:
     st.markdown("**Live AHU cutaway** - airflow speed, coil condensate and every "
                 "sensor badge are driven by the same simulation core as the chart.")
-    st.html(ahu_svg(sim))
+    # components.v1.html renders in an iframe with no sanitisation, so the
+    # SVG animation tags survive. st.html() strips them and shows nothing.
+    components.html(ahu_svg(sim), height=290, scrolling=False)
     st.caption("Streamline animation rate scales with delivered airflow. Droplets "
                "appear only when the coil surface falls below the intake dew point. "
                "The coil outline turns red when its bypass factor degrades.")
@@ -733,7 +777,10 @@ with tab2:
         reply, status = ask_llm(prompt, sim, controls, st.session_state.messages[:-1])
         if reply is None:
             reply = offline_answer(prompt, sim, controls)
-            if status == "unavailable":
+            if status == "empty":
+                reply += ("\n\n*(Live tutor returned no text - answered "
+                          "from the simulation core.)*")
+            elif status == "unavailable":
                 reply += ("\n\n*(Live tutor temporarily unavailable - answered "
                           "directly from the simulation core.)*")
         st.session_state.messages.append({"role": "assistant", "content": reply})

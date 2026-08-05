@@ -24,6 +24,7 @@ psy.SetUnitSystem(psy.SI)
 P_ATM = 101325.0          # Pa, sea level
 CP_AIR = 1.006            # kJ/kg.K, dry air
 CP_VAP = 1.860            # kJ/kg.K, water vapour
+T_HIGH_LIMIT = 60.0       # deg C, electric heater cutout
 
 st.set_page_config(page_title="AI HVAC Learning Platform", layout="wide")
 
@@ -35,9 +36,15 @@ st.set_page_config(page_title="AI HVAC Learning Platform", layout="wide")
 def state(t_db, w, label, tag=""):
     """Build a full psychrometric state from dry bulb temperature and
     humidity ratio. Every property below comes from PsychroLib / ASHRAE."""
+    t_db = min(max(t_db, -50.0), 120.0)     # keep inside PsychroLib's domain
     w = max(w, 1e-6)
-    w_sat = psy.GetSatHumRatio(t_db, P_ATM)
-    w = min(w, w_sat)                       # cannot exceed saturation
+    # Above ~100 C at 1 atm the saturation pressure exceeds atmospheric and the
+    # saturation humidity ratio goes negative, so the clamp is only meaningful
+    # below boiling.
+    if t_db < 99.0:
+        w_sat = psy.GetSatHumRatio(t_db, P_ATM)
+        if w_sat > 0:
+            w = min(w, w_sat)               # cannot exceed saturation
     rh = psy.GetRelHumFromHumRatio(t_db, w, P_ATM)
     return {
         "label": label,
@@ -105,7 +112,14 @@ def simulate(t_intake, rh_intake, airflow, t_chw, reheat_kw, humid_kgh, faults):
     # ---- 3. reheat : sensible heating, humidity ratio unchanged ----------
     cp_moist = CP_AIR + CP_VAP * s2["w"]
     dt_reheat = reheat_kw / (m_dot * cp_moist) if m_dot > 1e-6 else 0.0
-    s3 = state(s2["t_db"] + dt_reheat, s2["w"], "After reheat", "ST-7 / SH-4")
+    # Electric duct heaters carry a high-limit thermostat. If airflow is too low
+    # for the selected duty the element would glow and the cutout opens, so we
+    # cap the leaving air temperature rather than letting dT run away.
+    t_reheat = s2["t_db"] + dt_reheat
+    heater_tripped = t_reheat > T_HIGH_LIMIT
+    if heater_tripped:
+        t_reheat = T_HIGH_LIMIT
+    s3 = state(t_reheat, s2["w"], "After reheat", "ST-7 / SH-4")
 
     # ---- 4. humidifier : moisture added, dry bulb ~unchanged -------------
     dw = (humid_kgh / 3600.0) / m_dot if m_dot > 1e-6 else 0.0
@@ -130,6 +144,8 @@ def simulate(t_intake, rh_intake, airflow, t_chw, reheat_kw, humid_kgh, faults):
         "shr": shr,
         "condensate": max(condensate, 0.0),
         "dehumidifying": dehumidifying,
+        "heater_tripped": heater_tripped,
+        "dt_reheat_demand": dt_reheat,
         "faults": faults,
     }
 
@@ -179,6 +195,15 @@ def diagnose(sim, airflow_setpoint):
             f"point ({s1['t_dp']:.1f} deg C), so the coil is running dry. Lower the "
             "chilled water temperature to remove moisture."
         ))
+
+    if sim["heater_tripped"]:
+        findings.append((
+            "error", "Reheat high-limit cutout",
+            f"The selected reheat duty would raise the air by "
+            f"{sim['dt_reheat_demand']:.0f} K at the current mass flow of "
+            f"{sim['m_dot']:.3f} kg/s, taking it past the {T_HIGH_LIMIT:.0f} deg C "
+            "element cutout. On the real rig the high-limit thermostat opens and "
+            "the heater de-energises. Raise airflow or lower the reheat duty."))
 
     if not findings:
         findings.append((
@@ -614,10 +639,11 @@ def offline_answer(question, sim, controls):
                 f"setpoint of {controls['airflow_setpoint']:.0f} m3/h, giving a mass "
                 f"flow of {sim['m_dot']:.3f} kg/s using the intake specific volume of "
                 f"{s1['v']:.4f} m3/kg.")
+    tail = ("" if get_api_key() else
+            " [Offline mode - add a GEMINI_API_KEY to enable the full tutor.]")
     return (f"Current supply air is {s4['t_db']:.1f} deg C at {s4['rh']:.0f}% RH "
             f"({s4['w']*1000:.2f} g/kg, {s4['h']:.2f} kJ/kg). Ask me about the coil "
-            "load, dew point, sensible heat ratio, or run a diagnostic. "
-            "[Offline mode - add a GEMINI_API_KEY to enable the full tutor.]")
+            f"load, dew point, sensible heat ratio, or run a diagnostic.{tail}")
 
 
 # ==========================================================================
@@ -648,6 +674,9 @@ with st.sidebar:
         label_visibility="collapsed")
 
     st.divider()
+    if st.session_state.get("last_api_error"):
+        with st.expander("Tutor connection details"):
+            st.caption(st.session_state["last_api_error"][:600])
     st.caption("Psychrometrics: PsychroLib (ASHRAE Fundamentals 2017)")
     if get_api_key():
         _m = resolve_model()

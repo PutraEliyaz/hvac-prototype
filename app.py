@@ -439,11 +439,62 @@ def get_api_key():
     return os.environ.get("GEMINI_API_KEY", "")
 
 
+def resolve_model():
+    """Ask the API which models this key can actually use.
+
+    Model IDs churn (Gemini 2.0 Flash was retired on 1 June 2026), so hard-coding
+    one is fragile. We list what the key can reach, keep the text models that
+    support generateContent, and prefer Flash tiers by generation.
+    """
+    if "model_id" in st.session_state:
+        return st.session_state.model_id
+
+    key = get_api_key()
+    if not key:
+        return None
+    try:
+        from google import genai
+        client = genai.Client(api_key=key)
+        usable = [
+            m.name.replace("models/", "")
+            for m in client.models.list()
+            if "generateContent" in getattr(m, "supported_actions", []) or
+               "generateContent" in getattr(m, "supported_generation_methods", [])
+        ]
+        # exclude non-text variants that would fail on a plain text prompt
+        usable = [m for m in usable if not any(
+            bad in m for bad in ("image", "video", "audio", "tts", "embedding",
+                                 "veo", "imagen", "live", "native-audio"))]
+
+        def rank(name):
+            flash = "flash" in name
+            lite = "lite" in name
+            preview = "preview" in name or "exp" in name
+            # highest version number first, prefer stable non-lite flash
+            digits = "".join(c if c.isdigit() else " " for c in name).split()
+            ver = float(digits[0]) if digits else 0
+            return (flash, not preview, not lite, ver)
+
+        usable.sort(key=rank, reverse=True)
+        if usable:
+            st.session_state.model_id = usable[0]
+            st.session_state.model_options = usable[:12]
+            return usable[0]
+    except Exception as e:
+        st.session_state.model_error = str(e)
+    return None
+
+
 def ask_llm(question, sim, controls, history):
     """Live Gemini call with the digital twin state injected as context."""
     key = get_api_key()
     if not key:
         return None, "no_key"
+
+    model_id = resolve_model()
+    if not model_id:
+        return None, "no_model"
+
     try:
         from google import genai
         from google.genai import types
@@ -457,7 +508,7 @@ def ask_llm(question, sim, controls, history):
         contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
 
         resp = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=model_id,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT.format(
@@ -466,7 +517,15 @@ def ask_llm(question, sim, controls, history):
         )
         return resp.text, "ok"
     except Exception as e:
-        return None, f"error: {e}"
+        msg = str(e)
+        # a retired or unavailable model returns 404 / "limit: 0" - try the next one
+        if ("404" in msg or "limit: 0" in msg) and "model_options" in st.session_state:
+            opts = st.session_state.model_options
+            if model_id in opts and opts.index(model_id) + 1 < len(opts):
+                st.session_state.model_id = opts[opts.index(model_id) + 1]
+                return ask_llm(question, sim, controls, history)
+        st.session_state.last_api_error = msg
+        return None, "unavailable"
 
 
 def offline_answer(question, sim, controls):
@@ -546,7 +605,12 @@ with st.sidebar:
 
     st.divider()
     st.caption("Psychrometrics: PsychroLib (ASHRAE Fundamentals 2017)")
-    st.caption("AI tutor: Gemini " + ("connected" if get_api_key() else "OFFLINE - no key"))
+    if get_api_key():
+        _m = resolve_model()
+        st.caption(f"AI tutor: Gemini connected ({_m})" if _m
+                   else "AI tutor: key present but no usable model found")
+    else:
+        st.caption("AI tutor: OFFLINE - no key")
 
 controls = {
     "intake_dry_bulb_C": t_intake, "intake_RH_pct": rh_intake,
@@ -669,8 +733,9 @@ with tab2:
         reply, status = ask_llm(prompt, sim, controls, st.session_state.messages[:-1])
         if reply is None:
             reply = offline_answer(prompt, sim, controls)
-            if status.startswith("error"):
-                reply += f"\n\n*(API unavailable, answered from simulation core. {status})*"
+            if status == "unavailable":
+                reply += ("\n\n*(Live tutor temporarily unavailable - answered "
+                          "directly from the simulation core.)*")
         st.session_state.messages.append({"role": "assistant", "content": reply})
         with box:
             st.chat_message("assistant").write(reply)

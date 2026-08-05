@@ -662,8 +662,8 @@ with st.sidebar:
 
     st.caption("Plant setpoints")
     t_chw = st.slider("Chilled Water Temp (deg C)", 4.0, 20.0, 7.0, 0.5)
-    reheat_kw = st.slider("Reheat Duty (kW)", 0.0, 5.0, 1.0, 0.1)
-    humid_kgh = st.slider("Humidifier Output (kg/h)", 0.0, 6.0, 0.0, 0.1)
+    reheat_kw = st.slider("Reheat Duty (kW)", 0.0, 5.0, 1.5, 0.1)
+    humid_kgh = st.slider("Humidifier Output (kg/h)", 0.0, 6.0, 0.5, 0.1)
 
     st.divider()
     st.subheader("Fault Injection")

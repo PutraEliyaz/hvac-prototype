@@ -336,12 +336,14 @@ def ahu_svg(sim):
       <!-- blower -->
       <circle cx="112" cy="130" r="26" fill="rgba(110,231,255,0.08)"
               stroke="#6ee7ff" stroke-width="1.6"/>
-      <g transform-origin="112 130">
-        <path d="M112,110 L120,130 L112,150 L104,130 Z" fill="#6ee7ff" opacity="0.85"/>
-        <path d="M92,130 L112,122 L132,130 L112,138 Z" fill="#6ee7ff" opacity="0.55"/>
+      <g>
+        <path d="M112,112 L118,130 L112,148 L106,130 Z" fill="#6ee7ff" opacity="0.9"/>
+        <path d="M94,130 L112,124 L130,130 L112,136 Z" fill="#6ee7ff" opacity="0.6"/>
+        <circle cx="112" cy="130" r="4" fill="#6ee7ff"/>
         <animateTransform attributeName="transform" type="rotate"
                           from="0 112 130" to="360 112 130"
-                          dur="{speed*0.35:.2f}s" repeatCount="indefinite"/>
+                          dur="{speed*0.35:.2f}s" repeatCount="indefinite"
+                          additive="sum"/>
       </g>
       <text x="112" y="184" font-size="10" fill="#9fb0c0" text-anchor="middle">BLOWER AVE-1</text>
       <text x="112" y="196" font-size="9" fill="#6ee7ff" text-anchor="middle"

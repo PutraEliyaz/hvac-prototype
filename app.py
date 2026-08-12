@@ -1183,10 +1183,11 @@ k5.metric("Mass Flow", f"{sim['m_dot']:.3f} kg/s")
 
 st.divider()
 
-tab3, tab1, tab2 = st.tabs([
+tab3, tab1, tab2, tab_quiz = st.tabs([
     "WP3 - Psychrometric Visualization",
     "WP1 - Immersive AHU Environment",
-    "WP2 - AI Learning Assistant"])
+    "WP2 - AI Learning Assistant",
+    "Student Quiz"])
 
 # ---- WP3 ------------------------------------------------------------------
 with tab3:
@@ -1349,10 +1350,12 @@ with tab2:
         with box:
             st.chat_message("assistant").write(reply)
 
-    st.divider()
+# ---- Student Quiz (own tab) ----------------------------------------------
+with tab_quiz:
     st.markdown("### Student Quiz")
     st.caption("Questions marked (live) are generated from the current rig state, so the "
-               "answer changes as you adjust the plant.")
+               "answer changes as you adjust the plant. Answer keys appear in "
+               "Instructor demonstration mode.")
     quiz = build_quiz(sim)
     if "quiz_responses" not in st.session_state:
         st.session_state.quiz_responses = {}

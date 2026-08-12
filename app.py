@@ -639,7 +639,7 @@ def ahu_svg(sim, selected=None):
       {badge(46, s1, "#ffd166")}
       {badge(300, s2, "#4cc9f0")}
       {badge(482, s3, "#f77f00")}
-      {badge(652, s4, "#06d6a0")}
+      {badge(634, s4, "#06d6a0")}
     </svg></body></html>'''
 
 

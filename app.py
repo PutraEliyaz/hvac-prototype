@@ -548,11 +548,13 @@ def ahu_svg(sim, selected=None):
         'repeatCount="indefinite"/></path>')
 
     css = "html,body{margin:0;padding:0;background:transparent;overflow:hidden;}" \
-          "svg{display:block;width:100%;height:auto;}" \
+          ".ahu-wrap{position:relative;width:100%;max-width:1100px;margin:0 auto;" \
+          "aspect-ratio:860/330;}" \
+          ".ahu-wrap svg{position:absolute;inset:0;width:100%;height:100%;display:block;}" \
           'text{font-family:"Source Sans Pro",system-ui,sans-serif;}'
 
     return f'''<!DOCTYPE html><html><head><meta charset="utf-8"><style>{css}</style></head>
-    <body><svg viewBox="0 0 860 330" preserveAspectRatio="xMidYMid meet"
+    <body><div class="ahu-wrap"><svg viewBox="0 0 860 330" preserveAspectRatio="xMidYMid meet"
          xmlns="http://www.w3.org/2000/svg">
       <defs><marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="2.4"
         orient="auto"><path d="M0,0 L0,4.8 L6,2.4 z" fill="#6ee7ff"/></marker></defs>
@@ -640,7 +642,20 @@ def ahu_svg(sim, selected=None):
       {badge(300, s2, "#4cc9f0")}
       {badge(482, s3, "#f77f00")}
       {badge(634, s4, "#06d6a0")}
-    </svg></body></html>'''
+    </svg></div>
+    <script>
+      function _fit(){{
+        var w = document.querySelector('.ahu-wrap');
+        if(!w) return;
+        var h = Math.ceil(w.getBoundingClientRect().height);
+        try{{ if(window.frameElement) window.frameElement.style.height = h + 'px'; }}catch(e){{}}
+        try{{ if(window.Streamlit) window.Streamlit.setFrameHeight(h); }}catch(e){{}}
+      }}
+      window.addEventListener('load', _fit);
+      window.addEventListener('resize', _fit);
+      new ResizeObserver(_fit).observe(document.querySelector('.ahu-wrap'));
+      setTimeout(_fit, 50); setTimeout(_fit, 300);
+    </script></body></html>'''
 
 
 # ==========================================================================
@@ -1389,7 +1404,7 @@ with tab1:
                 "same simulation core as the chart.")
 
     selected = st.selectbox("Select a component to inspect", COMPONENTS, index=2)
-    components.html(ahu_svg(sim, selected), height=560, scrolling=False)
+    components.html(ahu_svg(sim, selected), height=470, scrolling=True)
     st.info(component_detail(selected, sim))
     st.caption("Streamline animation rate scales with delivered airflow. Droplets appear "
                "only when the coil surface falls below the intake dew point. The coil "

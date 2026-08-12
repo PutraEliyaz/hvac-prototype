@@ -43,10 +43,44 @@ work packages, so the chart, the 3D-style schematic and the AI tutor always agre
 | Fan belt slipping | airflow x 0.70 |
 | Low chilled water flow | approach +5 K |
 
+## Sensor-fault injection (WP3: potential sensor faults)
+
+Plant faults degrade the physics; sensor faults corrupt only the *reported*
+reading while the true state is unchanged, so they are caught by physical
+consistency, not by magnitude.
+
+| Sensor fault | Detection rule |
+|---|---|
+| SH-4 humidity sensor drift | reheat is sensible-only, so a change in W across the reheater is impossible |
+| ST-5 coil-outlet temp bias | air cannot leave the coil below the apparatus dew point |
+| SH-3 coil-outlet RH stuck high | relative humidity cannot exceed 100% |
+
 The diagnostics engine compares the twin against clean-plant expectations and
 raises findings, satisfying "compare normal vs faulty operation" (WP1),
 "identification of faults" (WP2) and "detect abnormal operating conditions"
 (WP3) from one mechanism.
+
+## Learning modes (WP1)
+
+- **Guided walkthrough** - step-by-step narration of each process stage.
+- **Student self-learning** - quiz active, fault panels hidden.
+- **Instructor demonstration** - fault and sensor injection unlocked, quiz answer keys shown.
+
+## Interactive schematic (WP1)
+
+The AHU cutaway now renders the air path, the chilled-water loop (pump, tank,
+coil) and the chiller's vapour-compression cycle (compressor, condenser,
+expansion, evaporator), all animated from the sim core. A component selector
+highlights any part and shows its live values and role. A student quiz mixes
+concept questions with live questions generated from the current rig state and
+exports the result as JSON for a workstation or LMS.
+
+## Psychrometric chart (WP3)
+
+The chart overlays the **actual measured** process against the **theoretical
+clean-plant** process for the same setpoints; the two paths separate whenever a
+fault is active. A rule-based decision-support panel recommends setpoint changes.
+State points export to CSV; analysis exports to JSON; charts export to PNG.
 
 ## Running
 

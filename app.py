@@ -15,7 +15,9 @@ correlations are used for any reported state property.
 import os
 import io
 import csv
+import time
 import json
+import copy
 import datetime
 import streamlit as st
 import streamlit.components.v1 as components
@@ -914,6 +916,129 @@ def offline_answer(question, sim, controls):
 
 
 # ==========================================================================
+# DATA INGESTION LAYER  (real-time sensor analytics scaffold)
+# ==========================================================================
+# The whole app reads from one `sim` dict of the shape simulate() returns. That
+# dict is produced from a *data source*, not from the sliders directly, so the
+# source can be swapped without touching the chart, tutor, diagnostics or
+# schematic. Two sources are provided:
+#
+#   SimSource  - the digital twin driven by the sidebar sliders (default).
+#   LiveSource - reads tagged sensor rows from a CSV feed in the rig's export
+#                format. Point it at the EDIBON data-management CSV (or later an
+#                MQTT / OPC-UA / nidaqmx bridge) and nothing downstream changes.
+#
+# In Live mode the four state points are built from *measured* sensor readings,
+# while simulate() runs alongside as the *theoretical* reference the chart
+# overlays them against - so "measured vs theoretical" becomes literally real.
+
+SENSOR_TAGS = ["ST-1", "SH-1", "ST-5", "SH-3", "ST-7", "SH-4",
+               "ST-9", "SH-5", "SC-1", "ST-13"]
+_APP_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() \
+    else os.getcwd()
+DEFAULT_FEED = os.path.join(_APP_DIR, "sample_sensor_feed.csv")
+
+
+class DataSource:
+    """Any source that can yield one frame of tagged sensor readings."""
+    def read(self):
+        raise NotImplementedError
+
+
+class SimSource(DataSource):
+    """Emit the slider-driven twin's state as tagged readings (transparency)."""
+    def __init__(self, sim, chw):
+        self.sim = sim
+        self.chw = chw
+
+    def read(self):
+        s = self.sim["states"]
+        return {
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "source": "sim", "row": None, "rows": None,
+            "ST-1": round(s[0]["t_db"], 2), "SH-1": round(s[0]["rh"], 1),
+            "ST-5": round(s[1]["t_db"], 2), "SH-3": round(s[1]["rh"], 1),
+            "ST-7": round(s[2]["t_db"], 2), "SH-4": round(s[2]["rh"], 1),
+            "ST-9": round(s[3]["t_db"], 2), "SH-5": round(s[3]["rh"], 1),
+            "SC-1": round(self.sim["airflow_actual"], 1), "ST-13": round(self.chw, 2),
+        }
+
+
+class LiveSource(DataSource):
+    """Read one frame from a CSV feed in the rig's sensor-tag format.
+
+    Swapping this file for the EDIBON data-management export - or replacing the
+    file read with an MQTT subscribe / OPC-UA read / nidaqmx sample - is the
+    only change needed to go from mock feed to real rig.
+    """
+    def __init__(self, path, row_index=None):
+        self.path = path
+        self.row_index = row_index          # None -> latest row
+
+    def read(self):
+        with open(self.path, newline="") as f:
+            rows = list(csv.DictReader(f))
+        if not rows:
+            return None
+        idx = len(rows) - 1 if self.row_index is None else self.row_index % len(rows)
+        raw = rows[idx]
+        frame = {"source": "live", "row": idx + 1, "rows": len(rows),
+                 "timestamp": raw.get("timestamp", "")}
+        for tag in SENSOR_TAGS:
+            if tag in raw and raw[tag] not in ("", None):
+                frame[tag] = float(raw[tag])
+        missing = [t for t in SENSOR_TAGS if t not in frame]
+        if missing:
+            raise ValueError(f"feed missing sensor tags: {', '.join(missing)}")
+        return frame
+
+
+def states_from_readings(r):
+    """Build the four psychrometric state points from measured T + RH pairs."""
+    def st_pt(t, rh, label, tag):
+        w = psy.GetHumRatioFromRelHum(t, max(min(rh, 100.0), 1.0) / 100.0, P_ATM)
+        return state(t, w, label, tag)
+    return [
+        st_pt(r["ST-1"], r["SH-1"], "Intake air", "ST-1 / SH-1"),
+        st_pt(r["ST-5"], r["SH-3"], "After cooling coil", "ST-5 / SH-3"),
+        st_pt(r["ST-7"], r["SH-4"], "After reheat", "ST-7 / SH-4"),
+        st_pt(r["ST-9"], r["SH-5"], "Supply to chamber", "ST-9 / SH-5"),
+    ]
+
+
+def sim_from_readings(r):
+    """Assemble a simulate()-shaped dict from measured readings, so every
+    downstream consumer (KPIs, diagnostics, chart, tutor, schematic) works
+    unchanged. Coil bypass and ADP are *inferred* from the measured air temps,
+    since the coil surface itself is not directly sensed."""
+    s = states_from_readings(r)
+    s1, s2, s3 = s[0], s[1], s[2]
+    airflow = r.get("SC-1", 500.0)
+    chw = r.get("ST-13", 7.0)
+    m_dot = (airflow / 3600.0) / s1["v"]
+    cp_moist = CP_AIR + CP_VAP * s2["w"]
+    q_total = m_dot * (s1["h"] - s2["h"])
+    q_sens = m_dot * cp_moist * (s1["t_db"] - s2["t_db"])
+    q_lat = q_total - q_sens
+    shr = q_sens / q_total if abs(q_total) > 1e-6 else 0.0
+    condensate = max(m_dot * (s1["w"] - s2["w"]) * 3600.0, 0.0)
+    approach = 1.5                                   # nominal, chilled-water side
+    t_adp = chw + approach
+    denom = s1["t_db"] - t_adp
+    bypass = (s2["t_db"] - t_adp) / denom if abs(denom) > 0.2 else 0.12
+    bypass = min(max(bypass, 0.0), 1.0)              # inferred effective bypass
+    return {
+        "states": s, "m_dot": m_dot, "airflow_actual": airflow,
+        "t_adp": t_adp, "bypass": bypass, "approach": approach,
+        "q_total": q_total, "q_sens": q_sens, "q_lat": q_lat, "shr": shr,
+        "condensate": condensate,
+        "dehumidifying": (s1["w"] - s2["w"]) > 1e-5,
+        "heater_tripped": False, "dt_reheat_demand": s3["t_db"] - s2["t_db"],
+        "faults": [], "measured": True,
+    }
+
+
+# ==========================================================================
 # UI
 # ==========================================================================
 
@@ -929,8 +1054,33 @@ with st.sidebar:
     instructor = mode == "Instructor demonstration"
 
     st.divider()
+    st.header("Data Source")
+    data_mode = st.radio(
+        "Data source", ["Simulated (sliders)", "Live ingestion (sensor feed)"],
+        label_visibility="collapsed",
+        help="Live mode builds the measured state points from a CSV sensor feed "
+             "in the rig's export format. Swap the file for the EDIBON export "
+             "(or an MQTT/OPC-UA bridge) with no other change.")
+    live_mode = data_mode.startswith("Live")
+    feed_path = DEFAULT_FEED
+    if live_mode:
+        st.session_state.setdefault("feed_row", 0)
+        feed_path = st.text_input("Sensor feed CSV path", DEFAULT_FEED)
+        fc1, fc2 = st.columns(2)
+        if fc1.button("Advance feed", use_container_width=True):
+            st.session_state.feed_row = st.session_state.get("feed_row", 0) + 1
+        if fc2.button("Reset feed", use_container_width=True):
+            st.session_state.feed_row = 0
+        st.caption("Replays the mock feed row by row so the measured line moves "
+                   "as you step through it. A real feed streams new rows live.")
+
+    st.divider()
     st.header("Live Sensor Controls")
-    st.caption("Intake conditions")
+    if live_mode:
+        st.caption("Intake conditions come from the feed in Live mode; these "
+                   "sliders drive the theoretical reference model.")
+    else:
+        st.caption("Intake conditions")
     t_intake = st.slider("Intake Dry Bulb (deg C)", 15.0, 45.0, 32.0, 0.5)
     rh_intake = st.slider("Intake Relative Humidity (%)", 20.0, 95.0, 70.0, 1.0)
     airflow = st.slider("Airflow Setpoint (m3/h)", 100, 1000, 500, 25)
@@ -970,16 +1120,49 @@ with st.sidebar:
     else:
         st.caption("AI tutor: OFFLINE - no key")
 
-controls = {
-    "intake_dry_bulb_C": t_intake, "intake_RH_pct": rh_intake,
-    "airflow_setpoint": airflow, "chilled_water_C": t_chw,
-    "reheat_kW": reheat_kw, "humidifier_kg_h": humid_kgh,
-}
-sim = simulate(t_intake, rh_intake, airflow, t_chw, reheat_kw, humid_kgh, faults)
-sim_ideal = simulate(t_intake, rh_intake, airflow, t_chw, reheat_kw, humid_kgh, [])
-findings = diagnose(sim, airflow)
+# ---- resolve the active data source --------------------------------------
+feed_error = None
+readings = None
+if live_mode:
+    try:
+        src = LiveSource(feed_path, row_index=st.session_state.get("feed_row"))
+        readings = src.read()
+        sim = sim_from_readings(readings)
+        # theoretical reference: clean plant on the *measured* intake + setpoints
+        sim_ideal = simulate(readings["ST-1"], readings["SH-1"], readings["SC-1"],
+                             readings["ST-13"], reheat_kw, humid_kgh, [])
+        airflow_ref = readings["SC-1"]
+        faults, sensor_faults = [], []          # detected, not injected, in Live
+        controls = {
+            "intake_dry_bulb_C": round(readings["ST-1"], 1),
+            "intake_RH_pct": round(readings["SH-1"], 1),
+            "airflow_setpoint": round(readings["SC-1"], 0),
+            "chilled_water_C": round(readings["ST-13"], 1),
+            "reheat_kW": reheat_kw, "humidifier_kg_h": humid_kgh,
+            "data_source": "live sensor feed",
+        }
+    except Exception as e:
+        feed_error = str(e)
+        live_mode = False                        # graceful fallback to simulated
+
+if not live_mode:
+    controls = {
+        "intake_dry_bulb_C": t_intake, "intake_RH_pct": rh_intake,
+        "airflow_setpoint": airflow, "chilled_water_C": t_chw,
+        "reheat_kW": reheat_kw, "humidifier_kg_h": humid_kgh,
+        "data_source": "simulated (sliders)",
+    }
+    sim = simulate(t_intake, rh_intake, airflow, t_chw, reheat_kw, humid_kgh, faults)
+    sim_ideal = simulate(t_intake, rh_intake, airflow, t_chw, reheat_kw, humid_kgh, [])
+    airflow_ref = airflow
+    readings = SimSource(sim, t_chw).read()
+
+findings = diagnose(sim, airflow_ref)
 reported, corrupted = apply_sensor_faults(sim, sensor_faults)
 sensor_findings = diagnose_sensors(sim, reported)
+
+if feed_error:
+    st.error(f"Live feed unavailable ({feed_error}). Fell back to simulated data.")
 
 # ---- diagnostics banner --------------------------------------------------
 st.subheader("Predictive Diagnostics & Anomaly Detection")
@@ -1007,6 +1190,27 @@ tab3, tab1, tab2 = st.tabs([
 
 # ---- WP3 ------------------------------------------------------------------
 with tab3:
+    with st.expander(
+            ("LIVE" if live_mode else "SIMULATED") + " data source - "
+            + ("streaming from sensor feed" if live_mode else "digital twin (sliders)"),
+            expanded=live_mode):
+        if live_mode:
+            st.caption(f"Source: {readings['source']} | frame {readings['row']} of "
+                       f"{readings['rows']} | timestamp {readings['timestamp']}")
+            st.caption("Measured state points below are built from these raw sensor "
+                       "readings through the same ingestion pipeline the rig would use. "
+                       "Swap this file for the EDIBON export to go fully live.")
+        else:
+            st.caption("Running on the digital twin. Switch to Live ingestion in the "
+                       "sidebar to feed measured state points from a sensor CSV.")
+        st.dataframe([{
+            "ST-1": readings.get("ST-1"), "SH-1": readings.get("SH-1"),
+            "ST-5": readings.get("ST-5"), "SH-3": readings.get("SH-3"),
+            "ST-7": readings.get("ST-7"), "SH-4": readings.get("SH-4"),
+            "ST-9": readings.get("ST-9"), "SH-5": readings.get("SH-5"),
+            "SC-1": readings.get("SC-1"), "ST-13": readings.get("ST-13"),
+        }], hide_index=True, use_container_width=True)
+
     c1, c2 = st.columns([3, 2])
     with c1:
         st.plotly_chart(psych_chart(sim, sim_ideal), use_container_width=True)

@@ -496,8 +496,8 @@ def ahu_svg(sim, selected=None):
     hl_humid = glow(580, 98, 62, 64) if sel == "Humidifier" else ""
     hl_chamber = glow(748, 72, 76, 116) if sel == "Test chamber" else ""
     hl_intake = glow(40, 95, 30, 70) if sel == "Intake" else ""
-    hl_chw = (glow(300, 250, 360, 44) if sel == "Chilled-water loop" else "")
-    hl_chiller = glow(690, 232, 120, 80) if sel == "Chiller" else ""
+    hl_chw = (glow(250, 228, 432, 74) if sel == "Chilled-water loop" else "")
+    hl_chiller = glow(690, 210, 120, 108) if sel == "Chiller" else ""
 
     drip = ""
     if sim["condensate"] > 0.01:
@@ -617,20 +617,22 @@ def ahu_svg(sim, selected=None):
       <text x="505" y="288" font-size="8.5" fill="#9fb0c0" text-anchor="middle">CHW TANK ST-15</text>
 
       <!-- chiller: vapour-compression cycle -->
-      <rect x="690" y="212" width="120" height="104" rx="5" fill="rgba(255,255,255,0.03)"
+      <rect x="690" y="210" width="120" height="108" rx="5" fill="rgba(255,255,255,0.03)"
             stroke="#4a5568" stroke-width="1.6"/>
-      <text x="750" y="226" font-size="9" fill="#9fb0c0" text-anchor="middle">CHILLER A-ENF (vapour compression)</text>
-      <circle cx="712" cy="252" r="8" fill="none" stroke="#f77f00" stroke-width="1.6"/>
-      <text x="712" y="272" font-size="7" fill="#f77f00" text-anchor="middle">COMP</text>
-      <rect x="736" y="244" width="20" height="16" fill="none" stroke="#e63946" stroke-width="1.4"/>
-      <text x="746" y="272" font-size="7" fill="#e63946" text-anchor="middle">COND</text>
-      <path d="M772,244 l6,8 l-6,8 l6,0" fill="none" stroke="#4cc9f0" stroke-width="1.4"/>
-      <text x="778" y="272" font-size="7" fill="#4cc9f0" text-anchor="middle">EXP</text>
-      <rect x="736" y="288" width="20" height="16" fill="none" stroke="#06d6a0" stroke-width="1.4"/>
-      <text x="746" y="300" font-size="6.5" fill="#06d6a0" text-anchor="middle">EVAP</text>
-      <path d="M720,252 H736 M756,252 H772 M778,268 V288 H756 M736,296 H720 V260"
+      <text x="750" y="223" font-size="8.5" fill="#c3cede" text-anchor="middle"
+            font-weight="bold">CHILLER A-ENF</text>
+      <text x="750" y="233" font-size="7.5" fill="#7f8c9a" text-anchor="middle">vapour compression</text>
+      <circle cx="712" cy="256" r="8" fill="none" stroke="#f77f00" stroke-width="1.6"/>
+      <text x="712" y="275" font-size="7" fill="#f77f00" text-anchor="middle">COMP</text>
+      <rect x="736" y="248" width="20" height="16" fill="none" stroke="#e63946" stroke-width="1.4"/>
+      <text x="746" y="275" font-size="7" fill="#e63946" text-anchor="middle">COND</text>
+      <path d="M772,248 l6,8 l-6,8 l6,0" fill="none" stroke="#4cc9f0" stroke-width="1.4"/>
+      <text x="784" y="275" font-size="7" fill="#4cc9f0" text-anchor="middle">EXP</text>
+      <rect x="736" y="289" width="20" height="14" fill="none" stroke="#06d6a0" stroke-width="1.4"/>
+      <text x="746" y="299" font-size="6.5" fill="#06d6a0" text-anchor="middle">EVAP</text>
+      <path d="M720,256 H736 M756,256 H772 M782,272 V296 H756 M736,296 H720 V264"
             stroke="#6b7280" stroke-width="1.2" fill="none"/>
-      <text x="750" y="314" font-size="8" fill="#9fb0c0" text-anchor="middle">rejects {sim["q_total"]:.1f} kW</text>
+      <text x="750" y="313" font-size="8" fill="#9fb0c0" text-anchor="middle">rejects {sim["q_total"]:.1f} kW</text>
 
       {badge(46, s1, "#ffd166")}
       {badge(300, s2, "#4cc9f0")}

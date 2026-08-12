@@ -1183,10 +1183,10 @@ k5.metric("Mass Flow", f"{sim['m_dot']:.3f} kg/s")
 
 st.divider()
 
-tab3, tab1, tab2, tab_quiz = st.tabs([
-    "WP3 - Psychrometric Visualization",
+tab1, tab2, tab3, tab_quiz = st.tabs([
     "WP1 - Immersive AHU Environment",
     "WP2 - AI Learning Assistant",
+    "WP3 - Psychrometric Visualization",
     "Student Quiz"])
 
 # ---- WP3 ------------------------------------------------------------------
